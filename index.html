@@ -49,6 +49,11 @@ function beep(freq, dur, type = "sine", vol = 0.08, slide = 0) {
     o.start(); o.stop(actx.currentTime + dur);
   } catch (e) { /* audio optional */ }
 }
+function ribbit(vol = 0.07) {
+  // a croaky trill, then one lower croak: rrr-RIBBIT
+  for (let i = 0; i < 5; i++) setTimeout(() => beep(132 - i * 6, 0.05, "sawtooth", vol, 25), i * 55);
+  setTimeout(() => beep(88, 0.22, "sawtooth", vol * 1.3, -25), 300);
+}
 const sfx = {
   hop:    () => beep(280, 0.18, "sine", 0.07, 260),
   land:   () => beep(180, 0.1, "sine", 0.05, -60),
@@ -56,6 +61,7 @@ const sfx = {
   pop:    () => { beep(500, 0.08, "sine", 0.09, 200); beep(900, 0.1, "sine", 0.05, 300); },
   splash: () => { beep(350, 0.25, "sine", 0.09, -280); beep(150, 0.35, "sine", 0.07, -100); },
   nope:   () => beep(200, 0.12, "sine", 0.05, -50),
+  ribbit,
   win:    () => { [523, 659, 784, 1047, 1319].forEach((f, i) => setTimeout(() => beep(f, 0.2, "square", 0.07), i * 140)); },
 };
 
@@ -164,7 +170,10 @@ function makeBugs(L) {
 }
 
 // ---------- state ----------
-let frog, bugs, particles, camY, state, time, score, level = 0, totalScore;
+let frog, bugs, particles, camY, state, time, score, level = 0, totalScore, nextRibbit = 0;
+
+// the frog ribbits quietly if it sits still for a while
+function rescheduleRibbit() { nextRibbit = time + 8 + Math.random() * 6; }
 
 function loadLevel(i) {
   level = i;
@@ -182,6 +191,7 @@ function loadLevel(i) {
   };
   camY = WORLD_H - H;
   score = 0;
+  rescheduleRibbit();
 }
 
 function reset() {
@@ -236,6 +246,7 @@ function startIfWaiting() {
   }
   state = "play";
   beep(440, 0.1, "square", 0.05, 200);
+  sfx.ribbit();
   return true;
 }
 
@@ -245,6 +256,7 @@ function hopToPad(p) {
   frog.hopTo = { pad: p };
   frog.angle = Math.atan2(p.y - frog.y, p.x - frog.x);
   frog.pad = null;
+  rescheduleRibbit();
   sfx.hop();
 }
 function hopToPoint(x, y, bank) {
@@ -253,12 +265,14 @@ function hopToPoint(x, y, bank) {
   frog.hopTo = bank ? { bank, point: { x, y } } : { point: { x, y }, splash: true };
   frog.angle = Math.atan2(y - frog.y, x - frog.x);
   frog.pad = null;
+  rescheduleRibbit();
   sfx.hop();
 }
 function tongueBug(b) {
   frog.mode = "tongue"; frog.tongueT = 0;
   frog.tongueBug = b;
   frog.angle = Math.atan2(b.y - frog.y, b.x - frog.x);
+  rescheduleRibbit();
   sfx.thwip();
 }
 
@@ -382,6 +396,12 @@ function update() {
       if (!turtleUp(frog.pad)) splashFrog(); // the turtle dove! whoops — paddle to the nearest pad
     }
 
+    // a soft ambient ribbit if the frog has been sitting still a while
+    if (frog.mode === "idle" && time > nextRibbit) {
+      sfx.ribbit(0.04);
+      rescheduleRibbit();
+    }
+
     if (frog.mode === "hop") {
       frog.hopT += 1 / 28; // ~0.47s hop
       const t = Math.min(1, frog.hopT);
@@ -399,6 +419,7 @@ function update() {
           frog.mode = "idle"; frog.pad = null;
           state = level < LEVELS.length - 1 ? "clear" : "win";
           sfx.win();
+          setTimeout(() => sfx.ribbit(0.09), 800); // happy ribbit after the fanfare
           burst(frog.x, frog.y, 50, ["#ffd700", "#ff8c00", "#fff", "#7fe06b", "#ff6bd6"], 8);
         } else if (frog.hopTo.bank === "bottom") {
           frog.mode = "idle"; frog.pad = null;
