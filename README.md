@@ -14,6 +14,15 @@ reach them from a nearby pad.
 There's no way to lose! Hop into the water and the frog just splashes, paddles to the
 nearest pad, and climbs back on.
 
+### The four ponds
+
+1. **Sunny Pond** — a gentle warm-up across calmly drifting pads.
+2. **Firefly Dusk** — the sun sets and glowing fireflies come out to be caught.
+3. **Rushing River** — a current carries the pads sideways, a different direction
+   each row, so time your hops as they float by.
+4. **Turtle Starlight** — a starry night where some "pads" are friendly turtles.
+   They bubble when they're about to dive — hop off in time, or enjoy the swim!
+
 ### Controls
 
 | Device | Hop | Catch a bug |

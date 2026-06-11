@@ -62,41 +62,100 @@ const sfx = {
 // ---------- deterministic pseudo-random for layout ----------
 const rnd = i => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 
+// ---------- levels ----------
+// Each level is a pond with its own look and one twist. Difficulty creeps up
+// gently — pads get a touch smaller and driftier, but never out of HOP_RANGE.
+const LEVELS = [
+  {
+    name: "Sunny Pond",
+    water: ["#4aa3d8", "#2f7fb5"], night: 0,
+    padsPerRow: [2, 3], padR: [44, 10], drift: [18, 22], driftSpd: [0.25, 0.45],
+    bugs: 12, bugSpd: [0.6, 0.7], firefly: false, current: 0, turtles: false,
+  },
+  {
+    name: "Firefly Dusk",
+    water: ["#c97b8e", "#584a8c"], night: 0.18,
+    padsPerRow: [2, 3], padR: [42, 9], drift: [22, 24], driftSpd: [0.3, 0.5],
+    bugs: 14, bugSpd: [0.7, 0.8], firefly: true, current: 0, turtles: false,
+  },
+  {
+    name: "Rushing River",
+    water: ["#46b2c9", "#1f6f96"], night: 0,
+    padsPerRow: [4, 4], padR: [41, 9], drift: [6, 8], driftSpd: [0.3, 0.4],
+    bugs: 12, bugSpd: [0.8, 0.8], firefly: false, current: 30, turtles: false,
+  },
+  {
+    name: "Turtle Starlight",
+    water: ["#27496d", "#122b47"], night: 0.32,
+    padsPerRow: [3, 3], padR: [42, 9], drift: [14, 18], driftSpd: [0.35, 0.5],
+    bugs: 14, bugSpd: [0.8, 0.8], firefly: true, current: 0, turtles: true,
+  },
+];
+
 // ---------- lily pads ----------
-const pads = [];
-{
+let pads = [];
+function makePads(L) {
+  const list = [];
+  const seed = level * 997;
   let row = 0;
   for (let y = 2580; y >= 280; y -= 100, row++) {
-    const count = 2 + Math.floor(rnd(row * 3 + 1) * 2); // 2-3 per row
+    const count = L.padsPerRow[0] +
+      Math.floor(rnd(row * 3 + 1 + seed) * (L.padsPerRow[1] - L.padsPerRow[0] + 1));
     for (let j = 0; j < count; j++) {
-      const baseX = 140 + (j + 0.5) * (680 / count) + (rnd(row * 7 + j) * 80 - 40);
-      pads.push({
+      // river rows spread over the full wrap circle with tighter jitter, so the
+      // coverage gap that travels past the screen edge stays within hop range
+      const span = L.current ? 760 : 680, left = L.current ? 100 : 140, jit = L.current ? 40 : 80;
+      const baseX = left + (j + 0.5) * (span / count) + (rnd(row * 7 + j + seed) * jit - jit / 2);
+      const p = {
         baseX, y,
-        r: 44 + rnd(row + j * 13) * 10,
-        range: 18 + rnd(row * 5 + j) * 22,
-        speed: 0.25 + rnd(row * 9 + j) * 0.45,
-        phase: rnd(row + j) * 6.28,
-        notch: rnd(row * 11 + j) * 6.28, // direction of the leaf notch
+        r: L.padR[0] + rnd(row + j * 13 + seed) * L.padR[1],
+        range: L.drift[0] + rnd(row * 5 + j + seed) * L.drift[1],
+        speed: L.driftSpd[0] + rnd(row * 9 + j + seed) * (L.driftSpd[1] - L.driftSpd[0]),
+        phase: rnd(row + j + seed) * 6.28,
+        notch: rnd(row * 11 + j + seed) * 6.28, // direction of the leaf notch (or turtle head)
+        flow: L.current ? (row % 2 ? L.current : -L.current) : 0,
+        turtle: false, diveOff: 0,
         x: baseX,
-      });
+      };
+      if (L.turtles && (row + j * 2) % 3 === 0) {
+        p.turtle = true;
+        p.diveOff = rnd(row * 17 + j + seed) * 8;
+        p.r = Math.max(p.r, 42);
+      }
+      list.push(p);
     }
   }
+  return list;
 }
-function padX(p, t) { return p.baseX + Math.sin(t * p.speed + p.phase) * p.range; }
+function padX(p, t) {
+  let x = p.baseX + Math.sin(t * p.speed + p.phase) * p.range;
+  if (p.flow) x = 100 + (((x + p.flow * t) - 100) % 760 + 760) % 760; // river carries pads, wrapping at the edges
+  return x;
+}
+
+// turtles surface for 5.5s (bubbling for the last 1.2s), then dive for 2.5s
+const DIVE_PERIOD = 8;
+function turtleUp(p) {
+  return !p.turtle || ((time + p.diveOff) % DIVE_PERIOD) < 5.5;
+}
+function turtleWarn(p) {
+  if (!p.turtle) return false;
+  const c = (time + p.diveOff) % DIVE_PERIOD;
+  return c > 4.3 && c < 5.5;
+}
 
 // ---------- bugs ----------
-const BUG_COUNT = 12;
-function makeBugs() {
+function makeBugs(L) {
   const list = [];
-  for (let i = 0; i < BUG_COUNT; i++) {
+  for (let i = 0; i < L.bugs; i++) {
     list.push({
-      ax: 180 + rnd(i * 31 + 5) * 600,
-      ay: 350 + i * 185,
-      rx: 55 + rnd(i * 17) * 35,
-      ry: 25 + rnd(i * 23) * 20,
-      speed: 0.6 + rnd(i * 13) * 0.7,
+      ax: 180 + rnd(i * 31 + 5 + level * 53) * 600,
+      ay: 350 + (i + 0.5) * (2200 / L.bugs),
+      rx: 55 + rnd(i * 17 + level) * 35,
+      ry: 25 + rnd(i * 23 + level) * 20,
+      speed: L.bugSpd[0] + rnd(i * 13 + level) * L.bugSpd[1],
       phase: rnd(i * 7) * 6.28,
-      kind: i % 3, // 0 dragonfly-blue, 1 dragonfly-red, 2 little fly
+      kind: L.firefly ? 3 : i % 3, // 0 dragonfly-blue, 1 dragonfly-red, 2 little fly, 3 firefly
       caught: false,
       x: 0, y: 0,
     });
@@ -105,9 +164,14 @@ function makeBugs() {
 }
 
 // ---------- state ----------
-let frog, bugs, particles, camY, state, time, score;
+let frog, bugs, particles, camY, state, time, score, level = 0, totalScore;
 
-function reset() {
+function loadLevel(i) {
+  level = i;
+  const L = LEVELS[level];
+  pads = makePads(L);
+  bugs = makeBugs(L);
+  particles = [];
   frog = {
     x: W / 2, y: 2720, angle: -Math.PI / 2, // facing up
     mode: "idle",       // idle | hop | tongue | swim
@@ -116,11 +180,14 @@ function reset() {
     tongueT: 0, tongueBug: null, tongueTip: null,
     swimTo: null,
   };
-  bugs = makeBugs();
-  particles = [];
   camY = WORLD_H - H;
-  time = 0; score = 0;
-  state = "title"; // title | play | win
+  score = 0;
+}
+
+function reset() {
+  time = 0; totalScore = 0;
+  loadLevel(0);
+  state = "title"; // title | play | clear | win
 }
 reset();
 
@@ -129,8 +196,20 @@ const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
 function frogPos() { return { x: frog.x, y: frog.y }; }
 function nearestPad(x, y) {
   let best = null, bd = 1e9;
-  for (const p of pads) { const d = dist(x, y, p.x, p.y); if (d < bd) { bd = d; best = p; } }
-  return best;
+  for (const p of pads) {
+    if (!turtleUp(p)) continue;
+    const d = dist(x, y, p.x, p.y); if (d < bd) { bd = d; best = p; }
+  }
+  return best || pads[0];
+}
+function splashFrog() {
+  frog.pad = null;
+  frog.mode = "swim";
+  frog.swimTo = nearestPad(frog.x, frog.y);
+  sfx.splash();
+  ripple(frog.x, frog.y, true);
+  ripple(frog.x, frog.y, false);
+  burst(frog.x, frog.y, 18, ["#bfe3ff", "#8fcdf5", "#e8f6ff"], 5);
 }
 function ripple(x, y, big) {
   particles.push({ ring: true, x, y, r: big ? 14 : 8, vr: big ? 2.2 : 1.4, life: 1 });
@@ -148,13 +227,16 @@ function burst(x, y, n, colors, spd = 5) {
 
 // ---------- actions ----------
 function startIfWaiting() {
-  if (state !== "play") {
-    if (state !== "title") reset();
-    state = "play";
-    beep(440, 0.1, "square", 0.05, 200);
-    return true;
+  if (state === "play") return false;
+  if (state === "clear") {
+    totalScore += score;
+    loadLevel(level + 1);
+  } else if (state === "win") {
+    reset();
   }
-  return false;
+  state = "play";
+  beep(440, 0.1, "square", 0.05, 200);
+  return true;
 }
 
 function hopToPad(p) {
@@ -202,8 +284,9 @@ cvs.addEventListener("pointerdown", e => {
   }
   if (bestBug) { tongueBug(bestBug); return; }
 
-  // 2) lily pad?
+  // 2) lily pad? (a dived turtle is just open water)
   for (const p of pads) {
+    if (!turtleUp(p)) continue;
     if (dist(wx, wy, p.x, p.y) <= p.r + 14) {
       if (p === frog.pad) return;
       if (dist(frog.x, frog.y, p.x, p.y) <= HOP_RANGE) hopToPad(p);
@@ -259,7 +342,7 @@ addEventListener("keydown", e => {
     // candidates: pads + a bank point straight ahead
     let best = null, bd = HOP_RANGE + 1, bestIsBank = null;
     for (const p of pads) {
-      if (p === frog.pad) continue;
+      if (p === frog.pad || !turtleUp(p)) continue;
       const vx = p.x - frog.x, vy = p.y - frog.y;
       const d = Math.hypot(vx, vy);
       if (d > HOP_RANGE || d < 6) continue;
@@ -296,6 +379,7 @@ function update() {
     if (frog.mode === "idle" && frog.pad) {
       frog.x = frog.pad.x;
       frog.y = frog.pad.y;
+      if (!turtleUp(frog.pad)) splashFrog(); // the turtle dove! whoops — paddle to the nearest pad
     }
 
     if (frog.mode === "hop") {
@@ -306,26 +390,21 @@ function update() {
       frog.x = frog.hopFrom.x + (tgt.x - frog.hopFrom.x) * e2;
       frog.y = frog.hopFrom.y + (tgt.y - frog.hopFrom.y) * e2;
       if (t >= 1) {
-        if (frog.hopTo.pad) {
+        if (frog.hopTo.pad && turtleUp(frog.hopTo.pad)) {
           frog.pad = frog.hopTo.pad;
           frog.mode = "idle";
           ripple(frog.x, frog.y, false);
           sfx.land();
         } else if (frog.hopTo.bank === "top") {
           frog.mode = "idle"; frog.pad = null;
-          state = "win";
+          state = level < LEVELS.length - 1 ? "clear" : "win";
           sfx.win();
           burst(frog.x, frog.y, 50, ["#ffd700", "#ff8c00", "#fff", "#7fe06b", "#ff6bd6"], 8);
         } else if (frog.hopTo.bank === "bottom") {
           frog.mode = "idle"; frog.pad = null;
         } else {
-          // SPLASH!
-          frog.mode = "swim";
-          frog.swimTo = nearestPad(frog.x, frog.y);
-          sfx.splash();
-          ripple(frog.x, frog.y, true);
-          ripple(frog.x, frog.y, false);
-          burst(frog.x, frog.y, 18, ["#bfe3ff", "#8fcdf5", "#e8f6ff"], 5);
+          // SPLASH! (open water, or the turtle dove while we were mid-air)
+          splashFrog();
         }
       }
     }
@@ -381,11 +460,43 @@ function update() {
 
 // ---------- drawing ----------
 function drawWater() {
+  const L = LEVELS[level];
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, "#4aa3d8");
-  g.addColorStop(1, "#2f7fb5");
+  g.addColorStop(0, L.water[0]);
+  g.addColorStop(1, L.water[1]);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
+
+  // river current: streaks flowing with each row's direction
+  if (L.current) {
+    ctx.strokeStyle = "rgba(255,255,255,0.13)";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    for (let i = 0; i < 30; i++) {
+      const wy = rnd(i * 7 + 3) * WORLD_H;
+      const sy = wy - camY;
+      if (sy < -20 || sy > H + 20) continue;
+      const dir = Math.round((2580 - wy) / 100) % 2 ? 1 : -1;
+      const x = ((rnd(i * 3 + 1) * W + time * L.current * 1.6 * dir) % W + W) % W;
+      ctx.beginPath();
+      ctx.moveTo(x - 22, sy);
+      ctx.lineTo(x + 22, sy);
+      ctx.stroke();
+    }
+  }
+
+  // night: twinkling star reflections on the water
+  if (L.night) {
+    ctx.fillStyle = "#fff";
+    for (let i = 0; i < 40; i++) {
+      const x = rnd(i * 11 + 4) * W;
+      const y = rnd(i * 13 + 8) * WORLD_H - camY;
+      if (y < 0 || y > H) continue;
+      ctx.globalAlpha = 0.25 + 0.25 * Math.sin(time * 2 + i * 1.7);
+      ctx.fillRect(x, y, 2.5, 2.5);
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // gentle ambient ripple rings, deterministic positions
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
@@ -433,10 +544,61 @@ function drawBank(yTop, yBot, isGoal) {
   }
 }
 
+function drawTurtle(p, sx, sy) {
+  if (!turtleUp(p)) { // submerged: just a faint shape under the water
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#163d33";
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, p.r * 0.85, p.r * 0.65, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  const warn = turtleWarn(p);
+  const wob = warn ? Math.sin(time * 18) * 2.5 : 0;
+  // shell
+  const grad = ctx.createRadialGradient(sx - p.r * 0.25, sy - p.r * 0.25, 4, sx, sy, p.r);
+  grad.addColorStop(0, "#8cc47a");
+  grad.addColorStop(1, "#42803e");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.ellipse(sx + wob * 0.4, sy, p.r, p.r * 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // shell plates
+  ctx.strokeStyle = "rgba(20,60,20,0.45)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy, p.r * 0.55, p.r * 0.44, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  for (let a = 0; a < 6; a++) {
+    const an = a * Math.PI / 3 + 0.3;
+    ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(an) * p.r * 0.55, sy + Math.sin(an) * p.r * 0.44);
+    ctx.lineTo(sx + Math.cos(an) * p.r * 0.95, sy + Math.sin(an) * p.r * 0.76);
+    ctx.stroke();
+  }
+  // head with little eyes
+  const hx = sx + Math.cos(p.notch) * (p.r + 7), hy = sy + Math.sin(p.notch) * (p.r * 0.8 + 7);
+  ctx.fillStyle = "#5da455";
+  ctx.beginPath(); ctx.arc(hx, hy, 8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#222";
+  ctx.beginPath(); ctx.arc(hx - 3, hy - 3, 1.6, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(hx + 3, hy - 3, 1.6, 0, Math.PI * 2); ctx.fill();
+  // about to dive: bubbles!
+  if (warn) {
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    for (let i = 0; i < 3; i++) {
+      const bx = sx + Math.sin(time * 6 + i * 2.1) * p.r * 0.6;
+      const by = sy - p.r * 0.4 - ((time * 30 + i * 14) % 28);
+      ctx.beginPath(); ctx.arc(bx, by, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
 function drawPad(p) {
   const sx = p.x, sy = p.y - camY;
   if (sy < -70 || sy > H + 70) return;
-  const reachable = state === "play" && frog.mode === "idle" && p !== frog.pad &&
+  const reachable = state === "play" && frog.mode === "idle" && p !== frog.pad && turtleUp(p) &&
                     dist(frog.x, frog.y, p.x, p.y) <= HOP_RANGE;
   if (reachable) {
     const pulse = 0.55 + Math.sin(time * 5) * 0.25;
@@ -446,6 +608,7 @@ function drawPad(p) {
     ctx.ellipse(sx, sy, p.r + 7, (p.r + 7) * 0.82, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
+  if (p.turtle) { drawTurtle(p, sx, sy); return; }
   // pad with a leaf notch
   const grad = ctx.createRadialGradient(sx - p.r * 0.3, sy - p.r * 0.3, 4, sx, sy, p.r);
   grad.addColorStop(0, "#7ed957");
@@ -488,6 +651,23 @@ function drawBug(b) {
     ctx.beginPath(); ctx.arc(10, 0, 5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "#fff";
     ctx.beginPath(); ctx.arc(12, -2, 1.7, 0, Math.PI * 2); ctx.fill();
+  } else if (b.kind === 3) {
+    // firefly: a glowing wanderer
+    const pulse = 0.6 + Math.sin(time * 6 + b.phase * 4) * 0.4;
+    const glow = ctx.createRadialGradient(0, 0, 1, 0, 0, 18);
+    glow.addColorStop(0, `rgba(225,255,130,${0.8 * pulse})`);
+    glow.addColorStop(1, "rgba(225,255,130,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(0, 0, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(230,240,255,0.7)";
+    ctx.save(); ctx.rotate(-0.5 + flut); ctx.beginPath(); ctx.ellipse(-2, -7, 9, 4, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.rotate(0.5 - flut);  ctx.beginPath(); ctx.ellipse(-2, 7, 9, 4, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.fillStyle = "#4a3b2a";
+    ctx.beginPath(); ctx.ellipse(3, 0, 6, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(240,255,140,${0.5 + 0.5 * pulse})`;
+    ctx.beginPath(); ctx.ellipse(-5, 0, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(7, -2, 1.7, 0, Math.PI * 2); ctx.fill();
   } else {
     // little fly
     ctx.fillStyle = "rgba(220,240,255,0.75)";
@@ -585,7 +765,10 @@ function drawHUD() {
   ctx.font = "bold 24px 'Segoe UI', sans-serif";
   ctx.textAlign = "left"; ctx.textBaseline = "top";
   ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.fillText(`🐛 ${score} / ${BUG_COUNT}`, 16, 12);
+  ctx.fillText(`🐛 ${score} / ${bugs.length}`, 16, 12);
+  ctx.font = "bold 17px 'Segoe UI', sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.fillText(`Level ${level + 1} of ${LEVELS.length} · ${LEVELS[level].name}`, 16, 44);
 
   // progress to the far bank
   const prog = Math.max(0, Math.min(1, 1 - (frog.y - TOP_BANK) / (2720 - TOP_BANK)));
@@ -635,6 +818,12 @@ function draw() {
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
+  // dusk/night falls on the water and pads; bugs and frog stay bright
+  const dark = LEVELS[level].night;
+  if (dark) {
+    ctx.fillStyle = `rgba(8,10,40,${dark})`;
+    ctx.fillRect(0, 0, W, H);
+  }
   for (const b of bugs) drawBug(b);
   drawTongue();
   drawFrog();
@@ -650,14 +839,19 @@ function draw() {
   drawHUD();
 
   const tapWord = isTouch ? "Tap" : "Click";
+  const goWord = isTouch ? "Tap" : "Press any key";
   if (state === "title") {
     overlay("🐸 LILY PAD HOPPER 🪷",
       `${tapWord} a lily pad to hop  ·  ${tapWord} a bug to zap it with your tongue!`,
-      `Hop all the way to the far bank!  ·  ${isTouch ? "Tap" : "Press any key"} to start`);
+      `Cross all ${LEVELS.length} ponds!  ·  ${goWord} to start`);
+  } else if (state === "clear") {
+    overlay(`🎉 LEVEL ${level + 1} CLEAR! 🎉`,
+      `You caught ${score} of ${bugs.length} bugs!`,
+      `Next up: ${LEVELS[level + 1].name}  ·  ${goWord} to keep hopping`);
   } else if (state === "win") {
-    overlay("🌟 YOU MADE IT ACROSS! 🌟",
-      `You caught ${score} of ${BUG_COUNT} bugs!`,
-      `${isTouch ? "Tap" : "Press any key"} to play again`);
+    overlay("🌟 YOU CROSSED EVERY POND! 🌟",
+      `${totalScore + score} bugs caught in all!`,
+      `${goWord} to play again`);
   }
 }
 
